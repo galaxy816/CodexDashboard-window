@@ -1,0 +1,118 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Codex 使用仪表盘" Width="330" Height="300"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" ShowInTaskbar="True" Topmost="False"
+        FontFamily="Microsoft YaHei UI" TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <SolidColorBrush x:Key="CardBrush" Color="#F21D1F22"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#FFA6A8AE"/>
+        <SolidColorBrush x:Key="LineBrush" Color="#FF393C42"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF79E2CF"/>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#FFF5F6F7"/>
+        </Style>
+        <Style x:Key="CircleButton" TargetType="Button">
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="Foreground" Value="#FFD9DBDF"/>
+            <Setter Property="Background" Value="#22FFFFFF"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="12">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid x:Name="DragSurface" Background="#01000000">
+        <Border x:Name="Glow" Margin="6" CornerRadius="18" Background="#3300E7C5" Opacity="0.36">
+            <Border.Effect>
+                <BlurEffect Radius="22"/>
+            </Border.Effect>
+        </Border>
+
+        <Border x:Name="Card" Margin="8" Padding="16,11,16,10"
+                Background="{StaticResource CardBrush}" BorderBrush="#FF35383D" BorderThickness="1"
+                CornerRadius="16">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="24" ShadowDepth="5" Opacity="0.38" Color="#FF000000"/>
+            </Border.Effect>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="0,0,0,5">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="{StaticResource AccentBrush}" Margin="0,0,9,0"/>
+                        <TextBlock Text="Codex 使用限额" FontSize="14" FontWeight="SemiBold"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="PinButton" Style="{StaticResource CircleButton}"
+                                ToolTip="固定在最上层" Content="📌" FontFamily="Segoe UI Emoji"
+                                FontSize="11" Margin="0,0,5,0"/>
+                        <Button x:Name="MinimizeButton" Style="{StaticResource CircleButton}"
+                                ToolTip="最小化" Content="—" FontSize="13" Margin="0,0,5,0"/>
+                        <Button x:Name="RefreshButton" Style="{StaticResource CircleButton}"
+                                ToolTip="立即刷新" Content="↻" FontSize="15"/>
+                    </StackPanel>
+                </Grid>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="LimitsPanel"/>
+                </ScrollViewer>
+
+                <Border Grid.Row="2" Background="#80141619" BorderBrush="#FF30343A" BorderThickness="1"
+                        CornerRadius="9" Margin="0,5,0,0" Padding="9,7">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ModelText" Text="模型：读取中…" FontSize="10" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="EffortText" Grid.Column="1" Text="强度：—" Foreground="{StaticResource MutedBrush}" FontSize="10" Margin="8,0,0,0"/>
+                        </Grid>
+                        <Grid Margin="0,5,0,0">
+                            <TextBlock Text="上下文使用量" Foreground="{StaticResource MutedBrush}" FontSize="10"/>
+                            <TextBlock x:Name="ContextValueText" Text="官方未提供" HorizontalAlignment="Right" FontSize="10"/>
+                        </Grid>
+                        <Border Height="5" CornerRadius="2.5" Background="#FF4A4D52" Margin="0,4,0,0">
+                            <Grid x:Name="ContextProgressGrid">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="0.001*"/>
+                                    <ColumnDefinition Width="100*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="ContextProgressFill" Grid.Column="0" CornerRadius="2.5" Background="{StaticResource AccentBrush}"/>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="3" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Margin="0,5,0,0" Padding="0,7,0,0">
+                    <Grid>
+                        <TextBlock Text="可用额度重置机会" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                        <TextBlock x:Name="ResetCreditsText" Text="读取中…" HorizontalAlignment="Right" FontSize="12" FontWeight="SemiBold"/>
+                    </Grid>
+                </Border>
+
+                <Grid Grid.Row="4" Margin="0,7,0,0">
+                    <TextBlock x:Name="StatusText" Text="正在连接 Codex…" Foreground="{StaticResource MutedBrush}" FontSize="10"/>
+                    <TextBlock Text="右键打开菜单" HorizontalAlignment="Right" Foreground="#FF70737A" FontSize="10"/>
+                </Grid>
+            </Grid>
+        </Border>
+
+    </Grid>
+</Window>

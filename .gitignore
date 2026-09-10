@@ -1,0 +1,7 @@
+dist/
+CodexDashboard.exe
+window-position.txt
+last-error.log
+.protocol-schema/
+*.user
+*.suo
