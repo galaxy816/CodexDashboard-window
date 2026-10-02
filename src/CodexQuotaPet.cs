@@ -35,6 +35,8 @@ namespace CodexQuotaPet
     {
         public readonly List<LimitInfo> Limits = new List<LimitInfo>();
         public int? ResetCredits;
+        public string ResetExpiryText = "无法读取";
+        public string PlanType;
         public string Model;
         public string ReasoningEffort;
         public long? ContextUsedTokens;
@@ -166,6 +168,7 @@ namespace CodexQuotaPet
                 object count;
                 if (resets.TryGetValue("availableCount", out count) && count != null)
                     snapshot.ResetCredits = Convert.ToInt32(count, CultureInfo.InvariantCulture);
+                snapshot.ResetExpiryText = FormatResetExpiry(resets, snapshot.ResetCredits);
             }
 
             List<IDictionary<string, object>> buckets = new List<IDictionary<string, object>>();
@@ -188,6 +191,10 @@ namespace CodexQuotaPet
 
             foreach (IDictionary<string, object> bucket in buckets)
             {
+                string plan = GetString(bucket, "planType");
+                if (!string.IsNullOrWhiteSpace(plan) &&
+                    (string.IsNullOrWhiteSpace(snapshot.PlanType) || GetString(bucket, "limitId") == "codex"))
+                    snapshot.PlanType = plan;
                 string bucketName = GetString(bucket, "limitName");
                 AddWindow(snapshot, bucket, "primary", bucketName);
                 AddWindow(snapshot, bucket, "secondary", bucketName);
@@ -200,6 +207,60 @@ namespace CodexQuotaPet
                 return a.CompareTo(b);
             });
             return snapshot;
+        }
+
+        private static string FormatResetExpiry(IDictionary<string, object> resets, int? count)
+        {
+            if (count == 0) return "无可用重置机会";
+            if (!count.HasValue || count < 0) return "无法读取";
+            object creditsValue;
+            if (!resets.TryGetValue("credits", out creditsValue)) return "无法读取";
+            IEnumerable credits = creditsValue as IEnumerable;
+            if (credits == null) return "无法读取";
+            int available = 0;
+            List<Tuple<long?, string>> expirations = new List<Tuple<long?, string>>();
+            foreach (object item in credits)
+            {
+                IDictionary<string, object> credit = item as IDictionary<string, object>;
+                if (credit == null) return "无法读取";
+                string status = GetString(credit, "status");
+                if (string.IsNullOrWhiteSpace(status)) return "无法读取";
+                if (!string.Equals(status, "available", StringComparison.OrdinalIgnoreCase)) continue;
+                available++;
+                string granted = "无法读取";
+                object grantedValue;
+                long grantedAt;
+                if (credit.TryGetValue("grantedAt", out grantedValue) && grantedValue != null &&
+                    long.TryParse(Convert.ToString(grantedValue, CultureInfo.InvariantCulture), out grantedAt))
+                {
+                    try { granted = DateTimeOffset.FromUnixTimeSeconds(grantedAt).LocalDateTime.ToString("yyyy.MM.dd HH:mm"); }
+                    catch (ArgumentOutOfRangeException) { }
+                }
+                object value;
+                if (!credit.TryGetValue("expiresAt", out value)) return "无法读取";
+                if (value == null)
+                {
+                    expirations.Add(Tuple.Create<long?, string>(null, granted));
+                    continue;
+                }
+                long timestamp;
+                if (!long.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out timestamp))
+                    return "无法读取";
+                try { DateTimeOffset.FromUnixTimeSeconds(timestamp); }
+                catch (ArgumentOutOfRangeException) { return "无法读取"; }
+                expirations.Add(Tuple.Create<long?, string>(timestamp, granted));
+            }
+            if (available != count.Value) return "无法读取";
+            return string.Join(Environment.NewLine, expirations
+                .OrderBy(delegate(Tuple<long?, string> credit) { return credit.Item1 ?? long.MaxValue; })
+                .Select(delegate(Tuple<long?, string> credit)
+                {
+                    long? expiry = credit.Item1;
+                    string time = expiry.HasValue
+                        ? DateTimeOffset.FromUnixTimeSeconds(expiry.Value).LocalDateTime.ToString("yyyy.MM.dd HH:mm")
+                        : "无过期时间";
+                    return credit.Item2 + " - " + time;
+                }));
         }
 
         private static void AddWindow(QuotaSnapshot snapshot, IDictionary<string, object> bucket, string key, string bucketName)
@@ -426,7 +487,10 @@ namespace CodexQuotaPet
     {
         private readonly Window window;
         private readonly StackPanel limitsPanel;
+        private readonly List<TextBlock> resetCountdowns = new List<TextBlock>();
         private readonly TextBlock resetCreditsText;
+        private readonly TextBlock resetExpiryText;
+        private readonly TextBlock titleText;
         private readonly TextBlock statusText;
         private readonly TextBlock modelText;
         private readonly TextBlock effortText;
@@ -469,6 +533,8 @@ namespace CodexQuotaPet
 
             limitsPanel = (StackPanel)window.FindName("LimitsPanel");
             resetCreditsText = (TextBlock)window.FindName("ResetCreditsText");
+            resetExpiryText = (TextBlock)window.FindName("ResetExpiryText");
+            titleText = (TextBlock)window.FindName("TitleText");
             statusText = (TextBlock)window.FindName("StatusText");
             modelText = (TextBlock)window.FindName("ModelText");
             effortText = (TextBlock)window.FindName("EffortText");
@@ -501,7 +567,7 @@ namespace CodexQuotaPet
 
             trayIcon = new Forms.NotifyIcon();
             trayIcon.Icon = Drawing.SystemIcons.Information;
-            trayIcon.Text = "Codex 使用仪表盘";
+            trayIcon.Text = "Codex 使用限额";
             trayIcon.ContextMenuStrip = trayMenu;
             trayIcon.DoubleClick += delegate { ShowPet(); };
 
@@ -644,6 +710,7 @@ namespace CodexQuotaPet
 
         private void RefreshTimerTick()
         {
+            UpdateResetCountdowns();
             if (!codexWasRunning || isReading) return;
             if (refreshCountdownSeconds > 0) refreshCountdownSeconds--;
             UpdateCountdownStatus();
@@ -659,6 +726,7 @@ namespace CodexQuotaPet
 
         private void RenderSnapshot(QuotaSnapshot snapshot)
         {
+            resetCountdowns.Clear();
             limitsPanel.Children.Clear();
             if (snapshot.Limits.Count == 0)
             {
@@ -680,10 +748,13 @@ namespace CodexQuotaPet
                 }
             }
 
-            resetCreditsText.Text = snapshot.ResetCredits.HasValue ? snapshot.ResetCredits.Value + " 次" : "官方未提供";
+            resetCreditsText.Text = snapshot.ResetCredits == 0 ? "无可用重置机会"
+                : snapshot.ResetCredits.HasValue ? snapshot.ResetCredits.Value + " 次" : "无法读取";
+            RenderResetExpirations(snapshot.ResetExpiryText, snapshot.ResetCredits == 0);
+            UpdateTitle(snapshot.PlanType);
             RenderCurrentThread(snapshot);
             refreshCountdownSeconds = 30;
-            statusPrefix = "已同步 · " + snapshot.FetchedAt.ToString("HH:mm:ss");
+            statusPrefix = "已同步 · " + snapshot.FetchedAt.ToString("yyyy.MM.dd HH:mm");
             statusIsError = false;
             UpdateCountdownStatus();
 
@@ -711,6 +782,33 @@ namespace CodexQuotaPet
             contextProgressGrid.ColumnDefinitions[0].Width = new GridLength(Math.Max(0.001, percent), GridUnitType.Star);
             contextProgressGrid.ColumnDefinitions[1].Width = new GridLength(Math.Max(0.001, 100 - percent), GridUnitType.Star);
             contextProgressFill.Background = AccentFor(100 - percent);
+        }
+
+        private void RenderResetExpirations(string text, bool empty)
+        {
+            resetExpiryText.Text = text;
+            ScrollViewer scroll = (ScrollViewer)window.FindName("ResetExpiryScroll");
+            scroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+            int rows = empty ? 0 : text.Split('\n').Length;
+            scroll.VerticalScrollBarVisibility = rows > 5 ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;
+            scroll.ScrollToTop();
+            window.Height = 352 + Math.Max(0, Math.Min(rows, 5) - 1) * 18;
+            if (window.IsVisible && window.WindowState == WindowState.Normal)
+                window.Top = Math.Max(SystemParameters.WorkArea.Top,
+                    Math.Min(window.Top, SystemParameters.WorkArea.Bottom - window.Height));
+        }
+
+        private void UpdateTitle(string planType)
+        {
+            string plan = string.IsNullOrWhiteSpace(planType) ? "无法读取" : planType.Trim().ToLowerInvariant();
+            if (plan == "free") plan = "免费";
+            else plan = System.Text.RegularExpressions.Regex.Replace(plan.Replace('_', ' ').Replace('-', ' '),
+                @"^pro\s*(\d+)x$", "pro $1x");
+            string title = "Codex 使用限额（" + plan + "）";
+            titleText.Text = title;
+            titleText.ToolTip = title;
+            window.Title = title;
+            trayIcon.Text = title.Length <= 63 ? title : title.Substring(0, 60) + "…";
         }
 
         private static string FormatEffort(string effort)
@@ -744,6 +842,7 @@ namespace CodexQuotaPet
             row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
@@ -761,12 +860,24 @@ namespace CodexQuotaPet
             Grid.SetColumn(percent, 1);
             row.Children.Add(percent);
 
+            TextBlock countdown = new TextBlock();
+            countdown.Tag = info.ResetsAt;
+            countdown.FontSize = 10;
+            countdown.Foreground = BrushFrom("#FFA6A8AE");
+            countdown.HorizontalAlignment = HorizontalAlignment.Right;
+            countdown.Margin = new Thickness(0, 2, 0, 0);
+            Grid.SetRow(countdown, 1);
+            Grid.SetColumnSpan(countdown, 2);
+            row.Children.Add(countdown);
+            resetCountdowns.Add(countdown);
+            UpdateResetCountdowns();
+
             TextBlock reset = new TextBlock();
             reset.Text = "重置时间：" + FormatResetTime(info.ResetsAt);
             reset.Foreground = BrushFrom("#FFA6A8AE");
             reset.FontSize = 10;
             reset.Margin = new Thickness(0, 2, 0, 0);
-            Grid.SetRow(reset, 1);
+            Grid.SetRow(reset, 2);
             Grid.SetColumnSpan(reset, 2);
             row.Children.Add(reset);
 
@@ -776,7 +887,7 @@ namespace CodexQuotaPet
             track.Background = BrushFrom("#FF4A4D52");
             track.HorizontalAlignment = HorizontalAlignment.Stretch;
             track.Margin = new Thickness(0, 5, 0, 1);
-            Grid.SetRow(track, 2);
+            Grid.SetRow(track, 3);
             Grid.SetColumnSpan(track, 2);
 
             Grid progressGrid = new Grid();
@@ -806,9 +917,12 @@ namespace CodexQuotaPet
 
         private void RenderError(string message)
         {
+            resetCountdowns.Clear();
             limitsPanel.Children.Clear();
             RenderUnavailableRow("额度不可用");
-            resetCreditsText.Text = "官方未提供";
+            resetCreditsText.Text = "无法读取";
+            RenderResetExpirations("无法读取", false);
+            UpdateTitle(null);
             modelText.Text = "模型：官方未提供";
             effortText.Text = "强度：官方未提供";
             contextValueText.Text = "官方未提供";
@@ -852,8 +966,20 @@ namespace CodexQuotaPet
         {
             if (!unixSeconds.HasValue) return "官方未提供";
             DateTime local = DateTimeOffset.FromUnixTimeSeconds(unixSeconds.Value).LocalDateTime;
-            if (local.Date == DateTime.Today) return local.ToString("HH:mm");
-            return local.ToString("yyyy年M月d日 HH:mm");
+            return local.ToString("yyyy.MM.dd HH:mm");
+        }
+
+        private void UpdateResetCountdowns()
+        {
+            foreach (TextBlock text in resetCountdowns)
+            {
+                long? resetsAt = text.Tag as long?;
+                if (!resetsAt.HasValue) { text.Text = "重置倒计时：无法读取"; continue; }
+                double seconds = (DateTimeOffset.FromUnixTimeSeconds(resetsAt.Value) - DateTimeOffset.UtcNow).TotalSeconds;
+                TimeSpan remaining = TimeSpan.FromSeconds(Math.Max(0, Math.Ceiling(seconds)));
+                text.Text = "重置倒计时：" + (remaining.Days > 0 ? remaining.Days + "天 " : "") +
+                    remaining.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+            }
         }
 
         private void WindowMouseLeftButtonDown(object sender, MouseButtonEventArgs args)
@@ -862,7 +988,7 @@ namespace CodexQuotaPet
             DependencyObject source = args.OriginalSource as DependencyObject;
             while (source != null)
             {
-                if (source is Button) return;
+                if (source is Button || source is System.Windows.Controls.Primitives.ScrollBar) return;
                 source = VisualTreeHelper.GetParent(source);
             }
             try { window.DragMove(); } catch { }
